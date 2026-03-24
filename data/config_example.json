@@ -1,0 +1,12 @@
+{
+  "parametric_design_parameters": {
+    "length": [1.0, 2.0],
+    "width": [0.5, 1.5],
+    "height": [0.1, 0.3]
+  },
+  "output_target_ranges": {
+    "efficiency": [80, 95],
+    "cost": [1000, 5000],
+    "time": [10, 50]
+  }
+}
