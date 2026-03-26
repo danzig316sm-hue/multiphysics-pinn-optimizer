@@ -75,9 +75,15 @@ class PINNModel(nn.Module):
         physics_constraint_3 = torch.mean(torch.abs(torch.diff(em_pred, dim=0)))
         
         physics_loss = (physics_constraint_1 + physics_constraint_2 + physics_constraint_3) / 3.0
-        
+
         total_loss = data_loss + physics_weight * physics_loss
-        return total_loss, data_loss, physics_loss
+
+        residuals = {
+            "energy_conservation": physics_constraint_1.item(),
+            "stress_equilibrium": physics_constraint_2.item(),
+            "em_smoothness": physics_constraint_3.item(),
+        }
+        return total_loss, data_loss, physics_loss, residuals
 
 
 class PINNTrainer:
@@ -106,7 +112,7 @@ class PINNTrainer:
             thermal_pred, stress_pred, em_pred = self.model(x)
             
             # Compute loss
-            loss, data_loss, phys_loss = self.model.physics_loss(
+            loss, data_loss, phys_loss, _ = self.model.physics_loss(
                 thermal_pred, stress_pred, em_pred,
                 y_thermal, y_stress, y_em,
                 physics_weight=physics_weight
@@ -134,7 +140,7 @@ class PINNTrainer:
                 y_em = y_em.to(self.device)
                 
                 thermal_pred, stress_pred, em_pred = self.model(x)
-                loss, _, _ = self.model.physics_loss(
+                loss, _, _, _ = self.model.physics_loss(
                     thermal_pred, stress_pred, em_pred,
                     y_thermal, y_stress, y_em
                 )
