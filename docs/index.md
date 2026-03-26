@@ -20,6 +20,7 @@ python docs_viewer.py search <term>   # full-text search across all docs
 | [self_correction.md](self_correction.md) | Self-correcting loop design, parameters, tuning guide |
 | [usage_guide.md](usage_guide.md) | End-to-end usage: data prep, training, inference |
 | [troubleshooting.md](troubleshooting.md) | Common errors and fixes |
+| [cad_integration.md](cad_integration.md) | CadQuery geometry, Biot-Savart field analysis, FreeCAD FEM, multi-objective optimizer |
 
 ---
 
