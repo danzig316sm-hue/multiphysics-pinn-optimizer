@@ -1,0 +1,16 @@
+.env
+*.pt
+__pycache__/
+*.pyc
+logs/
+pinn_optimization_runs/
+design_genome/
+*.h5
+
+# External repos cloned into project — not part of main repo
+Evaluator/
+.idea/
+critic_log/
+
+# Cowork generated files
+SESSION_REPORT_*.md
