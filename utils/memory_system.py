@@ -79,6 +79,18 @@ from typing import Any, Dict, List, Optional, Tuple
 import numpy as np
 
 
+# Fields included in the Pareto-front summary sent to subagents.
+# Declared once as a frozenset for O(1) membership tests inside hot loops.
+_PARETO_SUMMARY_FIELDS = frozenset({
+    "design_id",
+    "composite_score",
+    "torque_density_Nm_kg",
+    "mass_reduction_pct",
+    "efficiency_pct",
+    "bezier_mode",
+})
+
+
 # ---------------------------------------------------------------------------
 # Environment detection
 # ---------------------------------------------------------------------------
@@ -897,11 +909,11 @@ class SessionMemoryWriter:
                 except Exception:
                     ctx["best_design_vector"] = []
 
-            # Pareto front details
+            # Pareto front details (use a set for O(1) membership tests)
+            pareto_fields = _PARETO_SUMMARY_FIELDS
             ctx["pareto_front_details"] = [
                 {k: v for k, v in self.genome._index[did].items()
-                 if k in ("design_id", "composite_score", "torque_density_Nm_kg",
-                           "mass_reduction_pct", "efficiency_pct", "bezier_mode")}
+                 if k in pareto_fields}
                 for did in pareto[:5]
                 if did in self.genome._index
             ]
