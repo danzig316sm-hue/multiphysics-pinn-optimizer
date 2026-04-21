@@ -118,8 +118,9 @@ DESIGN_BOUNDS = np.array([
 ])[:40]  # ensure exactly 40
 
 N_DIM = len(DESIGN_BOUNDS)
-BOUNDS_LOW  = DESIGN_BOUNDS[:, 0]
-BOUNDS_HIGH = DESIGN_BOUNDS[:, 1]
+BOUNDS_LOW   = DESIGN_BOUNDS[:, 0]
+BOUNDS_HIGH  = DESIGN_BOUNDS[:, 1]
+BOUNDS_RANGE = BOUNDS_HIGH - BOUNDS_LOW  # precomputed for fast LHS scaling
 
 # NREL Pareto reference point (from MADE3D slides)
 PARETO_REFERENCE = np.array([
@@ -152,12 +153,21 @@ class GaussianProcessSurrogate:
         self.alpha_: Optional[np.ndarray] = None
         self.K_inv_: Optional[np.ndarray] = None
         self._fitted = False
+        # Cache training features divided by length_scale so predict() does not
+        # re-normalise the train set on every call.
+        self._X_train_scaled: Optional[np.ndarray] = None
 
     def _matern52(self, X1: np.ndarray, X2: np.ndarray) -> np.ndarray:
         """Matérn 5/2 kernel — standard choice for physical systems."""
         dists = cdist(X1 / self.length_scale, X2 / self.length_scale)
         sqrt5 = math.sqrt(5)
-        return (1 + sqrt5 * dists + 5/3 * dists**2) * np.exp(-sqrt5 * dists)
+        return (1 + sqrt5 * dists + 5.0 / 3.0 * dists * dists) * np.exp(-sqrt5 * dists)
+
+    def _matern52_with_train(self, X: np.ndarray) -> np.ndarray:
+        """Matérn 5/2 between X and cached scaled training set."""
+        dists = cdist(X / self.length_scale, self._X_train_scaled)
+        sqrt5 = math.sqrt(5)
+        return (1 + sqrt5 * dists + 5.0 / 3.0 * dists * dists) * np.exp(-sqrt5 * dists)
 
     def fit(self, X: np.ndarray, y: np.ndarray):
         """
@@ -167,15 +177,22 @@ class GaussianProcessSurrogate:
         """
         self.X_train = X.copy()
         self.Y_train = y.copy()
+        # Precompute normalized training inputs; predict() reuses this.
+        self._X_train_scaled = self.X_train / self.length_scale
 
         K = self._matern52(X, X)
         K += self.noise * np.eye(len(X))
 
-        # Cholesky for numerical stability
+        # Cholesky for numerical stability. Use solve_triangular-equivalent
+        # by solving L L^T K_inv = I with two triangular solves; a single
+        # call to np.linalg.solve with identity gives the same result more
+        # cheaply than two nested solves.
         try:
             L = np.linalg.cholesky(K)
+            # alpha = K^-1 y via two triangular solves
             self.alpha_ = np.linalg.solve(L.T, np.linalg.solve(L, y))
-            self.K_inv_ = np.linalg.solve(L.T, np.linalg.solve(L, np.eye(len(X))))
+            # K_inv via a single solve against the identity
+            self.K_inv_ = np.linalg.solve(K, np.eye(len(X)))
         except np.linalg.LinAlgError:
             # Fallback: add more noise
             K += 1e-4 * np.eye(len(X))
@@ -193,11 +210,13 @@ class GaussianProcessSurrogate:
             n = len(X)
             return np.zeros(n), np.ones(n)
 
-        K_star = self._matern52(X, self.X_train)
+        # Use cached, pre-scaled training inputs.
+        K_star = self._matern52_with_train(X)
         mean = K_star @ self.alpha_
 
-        K_star_star = np.diag(self._matern52(X, X))
-        var = K_star_star - np.sum(K_star @ self.K_inv_ * K_star, axis=1)
+        # K(x,x) = 1 for the Matérn 5/2 kernel along the diagonal (dist=0),
+        # so we avoid computing a full (N,N) matrix just to take its diag.
+        var = 1.0 - np.sum((K_star @ self.K_inv_) * K_star, axis=1)
         std = np.sqrt(np.maximum(var, 1e-12))
 
         return mean, std
@@ -333,9 +352,10 @@ class ParetoFrontierTracker:
             not_dominated = ~(
                 np.all(y_new >= Y, axis=1) & np.any(y_new > Y, axis=1)
             )
-            self.pareto_X  = [self.pareto_X[i]  for i, k in enumerate(not_dominated) if k]
-            self.pareto_Y  = [self.pareto_Y[i]  for i, k in enumerate(not_dominated) if k]
-            self.pareto_ids = [self.pareto_ids[i] for i, k in enumerate(not_dominated) if k]
+            keep = np.flatnonzero(not_dominated)
+            self.pareto_X   = [self.pareto_X[i]   for i in keep]
+            self.pareto_Y   = [self.pareto_Y[i]   for i in keep]
+            self.pareto_ids = [self.pareto_ids[i] for i in keep]
 
         self.pareto_X.append(x_new.copy())
         self.pareto_Y.append(y_new.copy())
@@ -360,11 +380,11 @@ class ParetoFrontierTracker:
         Y_max = np.max(Y, axis=0) * 1.1
         samples = np.random.uniform(ref, Y_max, (n_samples, self.n_obj))
 
-        # Count samples dominated by at least one Pareto point
-        dominated_count = 0
-        for s in samples:
-            if np.any(np.all(Y >= s, axis=1)):
-                dominated_count += 1
+        # Vectorized domination check: a sample s is dominated iff some
+        # Pareto point y satisfies y >= s on all objectives. Broadcast
+        # (n_samples, 1, n_obj) >= (1, n_pareto, n_obj) -> (n_samples, n_pareto, n_obj)
+        all_ge = np.all(Y[np.newaxis, :, :] >= samples[:, np.newaxis, :], axis=2)
+        dominated_count = int(np.sum(np.any(all_ge, axis=1)))
 
         volume = np.prod(Y_max - ref) * dominated_count / n_samples
         return float(volume)
@@ -481,10 +501,18 @@ class PMSGBayesianOptimizer:
         if _LHS:
             unit_cube = lhs(N_DIM, samples=n, criterion='maximin')
         else:
-            unit_cube = np.random.uniform(0, 1, (n, N_DIM))
+            # Stratified LHS fallback — much better space-filling than
+            # plain uniform random, which clusters in high-D spaces.
+            intervals = np.linspace(0.0, 1.0, n + 1)
+            low  = intervals[:-1]
+            high = intervals[1:]
+            unit_cube = np.empty((n, N_DIM))
+            for d in range(N_DIM):
+                unit_cube[:, d] = np.random.uniform(low, high)
+                np.random.shuffle(unit_cube[:, d])
 
         # Scale to bounds
-        return BOUNDS_LOW + unit_cube * (BOUNDS_HIGH - BOUNDS_LOW)
+        return BOUNDS_LOW + unit_cube * BOUNDS_RANGE
 
     def _evaluate(self, x: np.ndarray, design_id: str = "") -> Optional[np.ndarray]:
         """

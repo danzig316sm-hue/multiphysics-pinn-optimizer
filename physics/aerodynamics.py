@@ -106,11 +106,8 @@ class S809AirfoilData:
             Lift coefficient Cl
         """
         alpha = cls._clamp_alpha(np.atleast_1d(alpha))
-        # Horner's method for polynomial evaluation: a5*x^5 + a4*x^4 + ...
-        cl = cls.CL_COEFFS[0]
-        for coeff in cls.CL_COEFFS[1:]:
-            cl = cl * alpha + coeff
-        return cl
+        # Vectorized polynomial evaluation (Horner's method in C)
+        return np.polyval(cls.CL_COEFFS, alpha)
 
     @classmethod
     def get_cd(cls, alpha: np.ndarray) -> np.ndarray:
@@ -124,11 +121,9 @@ class S809AirfoilData:
             Drag coefficient Cd (always positive)
         """
         alpha = cls._clamp_alpha(np.atleast_1d(alpha))
-        cd = cls.CD_COEFFS[0]
-        for coeff in cls.CD_COEFFS[1:]:
-            cd = cd * alpha + coeff
+        # Vectorized polynomial evaluation (Horner's method in C)
         # Ensure Cd is always positive (physical constraint)
-        return np.abs(cd)
+        return np.abs(np.polyval(cls.CD_COEFFS, alpha))
 
 
 class BEMSolver:

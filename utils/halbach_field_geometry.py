@@ -360,6 +360,10 @@ class HalbachFieldAnalyzer:
     def __init__(self, geom: PMSGPoleGeometry):
         self.geom = geom
         self.builder = HalbachArrayBuilder(geom)
+        # Cache of the radial baseline result so halbach analyses that
+        # need it for comparison metrics do not recompute the full field
+        # on every call (e.g. during Bayesian optimization loops).
+        self._radial_baseline: Optional[HalbachFieldResult] = None
 
     def analyze(
         self,
@@ -477,7 +481,14 @@ class HalbachFieldAnalyzer:
 
         # ── Comparison to radial baseline ─────────────────────────────────────
         if magnetization == "halbach" and compare_radial:
-            radial_result = self.analyze("radial", compare_radial=False)
+            # The radial baseline only depends on self.geom and self.builder.
+            # Reuse the cached result if available to avoid recomputing the
+            # full 3D field every call.
+            if self._radial_baseline is None:
+                self._radial_baseline = self.analyze(
+                    "radial", compare_radial=False
+                )
+            radial_result = self._radial_baseline
             B_ratio = (result.B_radial_avg_T /
                        max(radial_result.B_radial_avg_T, 1e-9))
             # Torque ∝ B² in linear regime
